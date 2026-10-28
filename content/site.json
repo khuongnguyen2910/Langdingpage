@@ -16,7 +16,7 @@
   },
 
   "order": {
-    "endpoint": "",
+    "endpoint": "https://script.google.com/macros/s/AKfycbxDzLImuOM4tUVRxRGipfh4PQy2ltUiIHu_fFGvEbm9MWFwTby8sZsi42llhyjh1AW1dw/exec",
     "currency": "đ",
     "maxQty": 20,
     "hours": "thứ Hai đến thứ Sáu, 09:00 đến 18:00",
