@@ -1,11 +1,10 @@
 /**
- * Nhận đơn từ trang Pharmesthetic Homecare (langdingpage-theta.vercel.app).
- * Ghi đơn vào Google Sheet "GIVEHADA Homecare | Đơn web" và gửi email báo đơn mới.
+ * Trang bán hàng Pharmesthetic Homecare (langdingpage-theta.vercel.app).
+ * 1. Trả bảng giá cho trang web: tab "Bảng giá", cột D Giá niêm yết, cột E Giá giảm (để trống là không giảm).
+ * 2. Nhận đơn: ghi vào tab "Đơn hàng" và gửi email báo đơn mới. Đơn tính tiền theo bảng giá, không theo trình duyệt.
  *
- * Triển khai: Deploy > New deployment > Web app
- *   Execute as: Me
- *   Who has access: Anyone
- * Dán URL web app vào shop/content/site.json, mục order.endpoint.
+ * Cập nhật mã: dán đè toàn bộ, Lưu, rồi Triển khai > Quản lý triển khai > biểu tượng bút chì
+ * > Phiên bản: Phiên bản mới > Triển khai. URL ứng dụng web giữ nguyên.
  */
 
 const SHEET_ID = '1Lba9W2gbDLvjUg7R_8_SoGlZSV_BnLzFdM1lw4WP23o';
@@ -14,8 +13,18 @@ const PRICES_TAB = 'Bảng giá';
 const NOTIFY_TO = 'givehada@h2yjsc.com';
 const MAX_ITEMS = 30;
 const MAX_QTY = 20;
+const PRICE_CACHE_SECONDS = 60; // sửa giá trên sheet, khoảng 1 đến 2 phút sau web cập nhật
 
-function doGet() {
+function doGet(e) {
+  const action = e && e.parameter && e.parameter.action;
+  if (action === 'prices') {
+    const prices = loadPrices_();
+    const out = {};
+    Object.keys(prices).forEach(function (sku) {
+      out[sku] = { list: prices[sku].list, sale: prices[sku].sale || null };
+    });
+    return json_({ ok: true, prices: out, updatedAt: new Date().toISOString() });
+  }
   return json_({ ok: true, service: 'givehada-shop-orders' });
 }
 
@@ -49,7 +58,7 @@ function doPost(e) {
   }
   cache.put(rateKey, String(hits + 1), 1800);
 
-  // Giá lấy từ tab Bảng giá, không lấy giá trình duyệt gửi lên.
+  // Giá lấy từ tab Bảng giá: có giá giảm thì tính theo giá giảm, không thì theo giá niêm yết.
   const prices = loadPrices_();
   const items = [];
   (Array.isArray(data.items) ? data.items : []).slice(0, MAX_ITEMS).forEach(function (it) {
@@ -57,14 +66,18 @@ function doPost(e) {
     const p = prices[sku];
     if (!p) return;
     const qty = Math.max(1, Math.min(MAX_QTY, parseInt(it.qty, 10) || 1));
-    items.push({ sku: sku, name: p.name, size: p.size, qty: qty, price: p.price, amount: p.price * qty });
+    items.push({ sku: sku, name: p.name, size: p.size, qty: qty, price: p.price, list: p.list, amount: p.price * qty });
   });
   if (!items.length && !consult) return json_({ ok: false, message: 'Đơn hàng đang trống.' });
 
   const orderId = /^WEB\d{6}[A-Z0-9]{4}$/.test(String(data.orderId || '')) ? String(data.orderId) : makeId_();
   const total = items.reduce(function (s, it) { return s + it.amount; }, 0);
+  const saved = items.reduce(function (s, it) { return s + (it.list - it.price) * it.qty; }, 0);
   const qtyAll = items.reduce(function (s, it) { return s + it.qty; }, 0);
-  const itemsText = items.map(function (it) { return it.qty + ' x ' + it.name + ' (' + it.sku + ', ' + it.size + ')'; }).join('\n');
+  const itemsText = items.map(function (it) {
+    return it.qty + ' x ' + it.name + ' (' + it.sku + ', ' + it.size + '), ' + money_(it.price)
+      + (it.list > it.price ? ', giá niêm yết ' + money_(it.list) : '');
+  }).join('\n');
   const src = data.source || {};
   const srcText = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'fbclid', 'referrer']
     .filter(function (k) { return src[k]; })
@@ -91,7 +104,7 @@ function doPost(e) {
   }
 
   try {
-    notify_({ orderId: orderId, name: name, phone: phone, address: address, note: note, consult: consult, items: items, total: total, srcText: srcText });
+    notify_({ orderId: orderId, name: name, phone: phone, address: address, note: note, consult: consult, items: items, total: total, saved: saved, srcText: srcText });
   } catch (err) {
     console.error('Gửi email báo đơn lỗi: ' + err);
   }
@@ -102,39 +115,55 @@ function doPost(e) {
 
 function loadPrices_() {
   const cache = CacheService.getScriptCache();
-  const hit = cache.get('prices');
+  const hit = cache.get('prices_v2');
   if (hit) return JSON.parse(hit);
   const rows = SpreadsheetApp.openById(SHEET_ID).getSheetByName(PRICES_TAB).getDataRange().getValues().slice(1);
   const out = {};
   rows.forEach(function (r) {
     const sku = String(r[0] || '').trim().toUpperCase();
-    const price = Number(r[3]);
-    if (sku && price > 0) out[sku] = { name: String(r[1]), size: String(r[2]), price: price };
+    const list = toNumber_(r[3]);
+    if (!sku || !(list > 0)) return;
+    const saleRaw = toNumber_(r[4]);
+    const sale = saleRaw > 0 && saleRaw < list ? saleRaw : 0;
+    out[sku] = { name: String(r[1]), size: String(r[2]), list: list, sale: sale, price: sale || list };
   });
-  cache.put('prices', JSON.stringify(out), 600);
+  cache.put('prices_v2', JSON.stringify(out), PRICE_CACHE_SECONDS);
   return out;
 }
 
+function toNumber_(v) {
+  if (typeof v === 'number') return Math.round(v);
+  const s = String(v == null ? '' : v).replace(/[^\d]/g, '');
+  return s ? Number(s) : 0;
+}
+
+function money_(n) {
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + 'đ';
+}
+
 function notify_(o) {
-  const money = function (n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + 'đ'; };
   const rows = o.items.map(function (it) {
-    return '<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">' + esc_(it.name) + '<br><small style="color:#777">' + esc_(it.sku) + ', ' + esc_(it.size) + '</small></td>'
+    const unit = money_(it.price) + (it.list > it.price ? ' <s style="color:#999">' + money_(it.list) + '</s>' : '');
+    return '<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">' + esc_(it.name) + '<br><small style="color:#777">' + esc_(it.sku) + ', ' + esc_(it.size) + ', ' + unit + '</small></td>'
       + '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center">' + it.qty + '</td>'
-      + '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">' + money(it.amount) + '</td></tr>';
+      + '<td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">' + money_(it.amount) + '</td></tr>';
   }).join('');
+  const savedRow = o.saved > 0
+    ? '<tr><td style="padding:6px 10px;color:#777">Đã giảm</td><td></td><td style="padding:6px 10px;text-align:right;color:#777">' + money_(o.saved) + '</td></tr>'
+    : '';
   const html = '<div style="font-family:Arial,sans-serif;font-size:14px;color:#111">'
     + '<h2 style="margin:0 0 6px">Đơn web ' + esc_(o.orderId) + '</h2>'
     + '<p style="margin:0 0 14px;color:#555">Pharmesthetic Homecare, gọi xác nhận trong giờ làm việc.</p>'
     + '<p><b>Khách:</b> ' + esc_(o.name) + '<br><b>Số điện thoại:</b> ' + esc_(o.phone) + '<br><b>Địa chỉ:</b> ' + esc_(o.address) + '</p>'
     + (o.consult ? '<p><b>Cần tư vấn chọn sản phẩm.</b></p>' : '')
     + (o.note ? '<p><b>Ghi chú:</b> ' + esc_(o.note) + '</p>' : '')
-    + (o.items.length ? '<table style="border-collapse:collapse;min-width:320px">' + rows
-      + '<tr><td style="padding:8px 10px"><b>Tạm tính</b></td><td></td><td style="padding:8px 10px;text-align:right"><b>' + money(o.total) + '</b></td></tr></table>' : '')
+    + (o.items.length ? '<table style="border-collapse:collapse;min-width:320px">' + rows + savedRow
+      + '<tr><td style="padding:8px 10px"><b>Tạm tính</b></td><td></td><td style="padding:8px 10px;text-align:right"><b>' + money_(o.total) + '</b></td></tr></table>' : '')
     + (o.srcText ? '<p style="color:#777;font-size:12px;white-space:pre-line">Nguồn: ' + esc_(o.srcText) + '</p>' : '')
     + '<p><a href="https://docs.google.com/spreadsheets/d/' + SHEET_ID + '/edit">Mở bảng đơn</a></p></div>';
   MailApp.sendEmail({
     to: NOTIFY_TO,
-    subject: '[Đơn web] ' + o.orderId + ' | ' + o.name + ' | ' + (o.items.length ? money(o.total) : 'Cần tư vấn'),
+    subject: '[Đơn web] ' + o.orderId + ' | ' + o.name + ' | ' + (o.items.length ? money_(o.total) : 'Cần tư vấn'),
     htmlBody: html,
     name: 'Pharmesthetic Homecare',
   });
@@ -170,5 +199,5 @@ function json_(obj) {
 /** Chạy tay một lần trong trình soạn Apps Script để cấp quyền và thử gửi email. */
 function testNotify() {
   notify_({ orderId: 'WEB000000TEST', name: 'Đơn thử', phone: '0900000000', address: 'Địa chỉ thử', note: 'Kiểm tra email báo đơn', consult: false,
-    items: [{ sku: 'VQM12', name: 'Vibanqm Lotion', size: '30ml', qty: 1, price: 2060000, amount: 2060000 }], total: 2060000, srcText: '' });
+    items: [{ sku: 'VQM12', name: 'Vibanqm Lotion', size: '30ml', qty: 1, price: 1750000, list: 2060000, amount: 1750000 }], total: 1750000, saved: 310000, srcText: '' });
 }

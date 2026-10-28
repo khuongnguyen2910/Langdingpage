@@ -592,6 +592,24 @@ main { position: relative; z-index: 1; overflow-x: hidden; overflow-x: clip; }
 }
 .sect__quote em { font-family: var(--serif); font-weight: 300; }
 
+/* ---------- giá: giá giảm, giá niêm yết gạch ngang, mức giảm ---------- */
+
+.price { display: inline-flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; }
+.price__now { font-weight: 600; }
+.price--sale .price__now { color: rgb(var(--gold)); }
+.price__was { font-weight: 400; font-size: 0.78em; color: var(--faint); text-decoration-thickness: 1px; }
+.price__off {
+  align-self: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(var(--gold));
+  color: var(--gold-ink);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+}
+
 /* ---------- chip, quy cách, số lượng ---------- */
 
 .chips { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -815,8 +833,22 @@ main { position: relative; z-index: 1; overflow-x: hidden; overflow-x: clip; }
   color: var(--muted);
 }
 .pcard__foot { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding-top: 10px; }
-.pcard__price { font-weight: 600; font-size: 15px; }
-.pcard__price span { margin-left: 7px; font-weight: 400; font-size: 12px; color: var(--faint); }
+.pcard__price { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; row-gap: 2px; font-size: 15px; }
+.pcard__size { font-size: 12px; color: var(--faint); }
+.pcard__badge {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 1;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgb(var(--gold));
+  color: var(--gold-ink);
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+}
 .pcard__add {
   display: inline-flex;
   align-items: center;
@@ -902,10 +934,12 @@ main { position: relative; z-index: 1; overflow-x: hidden; overflow-x: clip; }
 .ritual__items { list-style: none; padding: 14px 0 0; display: grid; gap: 8px; border-top: 1px solid var(--line); margin-top: auto; }
 .ritual__items li { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; }
 .ritual__items button { padding: 0; border: 0; background: none; text-align: left; text-decoration: underline; text-decoration-color: var(--line-2); text-underline-offset: 3px; cursor: pointer; }
-.ritual__items span { color: var(--muted); white-space: nowrap; }
+.ritual__items .price { justify-content: flex-end; color: var(--muted); white-space: nowrap; }
+.ritual__items .price__now { font-weight: 400; }
 .ritual__foot { display: grid; gap: 12px; }
-.ritual__total { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; font-size: 18px; }
-.ritual__total span { font-weight: 400; font-size: 13px; color: var(--muted); }
+.ritual__total { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 18px; }
+.ritual__label { font-size: 13px; color: var(--muted); }
+.ritual__total .price { justify-content: flex-end; }
 
 /* ---------- đặt hàng ---------- */
 
@@ -942,7 +976,8 @@ main { position: relative; z-index: 1; overflow-x: hidden; overflow-x: clip; }
 .cart__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .cart__info { grid-area: info; min-width: 0; }
 .cart__name { font-size: 14px; font-weight: 600; line-height: 1.35; }
-.cart__meta { font-size: 12px; color: var(--muted); }
+.cart__meta { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; font-size: 12px; color: var(--muted); }
+.cart__meta .price__now { font-weight: 400; }
 .cart__ctl { grid-area: ctl; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .cart__line { font-weight: 600; font-size: 14.5px; }
 .cart__rm {
@@ -962,7 +997,8 @@ main { position: relative; z-index: 1; overflow-x: hidden; overflow-x: clip; }
 .cart__rm:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .cart__empty { padding: 18px 0 6px; font-size: 14px; color: var(--muted); }
 .cart__sum { padding-top: 16px; display: grid; gap: 6px; }
-.cart__sum p:first-child { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; }
+.cart__total { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; }
+.cart__save { display: flex; justify-content: space-between; align-items: baseline; font-size: 13.5px; color: rgb(var(--gold)); }
 .cart__sum strong { font-size: 22px; letter-spacing: -0.01em; }
 .cart__note { font-size: 12.5px; color: var(--muted); }
 
@@ -1160,8 +1196,13 @@ main { position: relative; z-index: 1; overflow-x: hidden; overflow-x: clip; }
 .pd__brand { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: rgb(var(--gold) / 0.85); }
 .pd__name { margin-top: -10px; font-family: var(--serif); font-style: italic; font-weight: 300; font-size: clamp(30px, 4vw, 42px); line-height: 1.06; }
 .pd__type { margin-top: -8px; font-size: 13.5px; color: var(--muted); }
-.pd__price { display: flex; align-items: baseline; gap: 10px; font-weight: 600; font-size: 22px; }
-.pd__price span { font-weight: 400; font-size: 13.5px; color: var(--muted); }
+.pd__price { display: flex; align-items: baseline; gap: 10px; font-size: 22px; }
+.pd__size { font-weight: 400; font-size: 13.5px; color: var(--muted); }
+.pd__prices { display: grid; gap: 6px; padding: 12px 14px; border-radius: 12px; background: rgb(var(--gold) / 0.06); box-shadow: inset 0 0 0 1px rgb(var(--gold) / 0.28); }
+.pd__row { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; }
+.pd__label { min-width: 100px; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
+.pd__row .price__now { font-size: 24px; }
+.pd__row .price__was { font-size: 15px; }
 .pd__benefit { font-size: 15px; line-height: 1.65; color: var(--ink-2); }
 .pd__block { display: grid; gap: 7px; padding-top: 14px; border-top: 1px solid var(--line); }
 .pd__block h3 { font-size: 11px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); }

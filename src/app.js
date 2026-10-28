@@ -9,6 +9,16 @@
   const esc = (s = '') => String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const money = (n) => `${Math.round(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')}${DATA.currency}`;
+  // Giá bán: có giá giảm thấp hơn giá niêm yết thì bán theo giá giảm
+  const eff = (p) => (p.sale > 0 && p.sale < p.price ? p.sale : p.price);
+  const offPct = (p) => (p && p.sale > 0 && p.sale < p.price ? Math.round((1 - p.sale / p.price) * 100) : 0);
+  // Cùng cấu trúc với priceHtml trong scripts/build.mjs
+  const priceInner = (p, qty = 1, pill = false) => {
+    const off = offPct(p);
+    return `${qty > 1 ? `${qty} x ` : ''}<span class="price__now">${money(eff(p))}</span>${off ? `<s class="price__was">${money(p.price)}</s>` : ''}${off && pill ? `<span class="price__off">-${off}%</span>` : ''}`;
+  };
+  const priceSpan = (p, sku, qty = 1, pill = false) =>
+    `<span class="price${offPct(p) ? ' price--sale' : ''}" data-price-sku="${esc(sku)}"${qty > 1 ? ` data-qty="${qty}"` : ''}${pill ? ' data-pill="1"' : ''}>${priceInner(p, qty, pill)}</span>`;
 
   // Bộ nhớ trình duyệt có thể bị chặn (chế độ ẩn danh, trình duyệt trong app): luôn bọc try.
   const store = {
@@ -190,12 +200,15 @@
   };
   let cart = sanitize(store.get(CART_KEY, {}));
   const count = () => Object.values(cart).reduce((a, b) => a + b, 0);
-  const subtotal = () => Object.entries(cart).reduce((s, [sku, q]) => s + P[sku].price * q, 0);
+  const subtotal = () => Object.entries(cart).reduce((s, [sku, q]) => s + eff(P[sku]) * q, 0);
+  const savedTotal = () => Object.entries(cart).reduce((s, [sku, q]) => s + (P[sku].price - eff(P[sku])) * q, 0);
 
   const listEl = document.querySelector('[data-cart-list]');
   const emptyEl = document.querySelector('[data-cart-empty]');
   const sumEl = document.querySelector('[data-cart-sum]');
   const subEl = document.querySelector('[data-subtotal]');
+  const saveEl = document.querySelector('[data-cart-save]');
+  const savedEl = document.querySelector('[data-saved]');
   const clearBtn = document.querySelector('[data-clear]');
   const badges = Array.from(document.querySelectorAll('[data-count]'));
   const form = document.querySelector('[data-form]');
@@ -223,7 +236,7 @@
         const p = P[sku];
         return `<li class="cart__item">
           ${thumb(sku)}
-          <div class="cart__info"><p class="cart__name">${esc(p.name)}</p><p class="cart__meta">${esc(p.size)}, ${money(p.price)}</p></div>
+          <div class="cart__info"><p class="cart__name">${esc(p.name)}</p><p class="cart__meta"><span>${esc(p.size)}</span>${priceSpan(p, sku)}</p></div>
           <button type="button" class="cart__rm" data-rm="${esc(sku)}" aria-label="Bỏ ${esc(p.name)} khỏi đơn">${icons.close}</button>
           <div class="cart__ctl">
             <div class="qty qty--sm" data-cart-sku="${esc(sku)}">
@@ -231,7 +244,7 @@
               <input class="qty__input" type="number" inputmode="numeric" min="0" max="${DATA.maxQty}" value="${q}" aria-label="Số lượng ${esc(p.name)}">
               <button type="button" class="qty__btn" data-step="1" aria-label="Thêm một ${esc(p.name)}">${icons.plus}</button>
             </div>
-            <span class="cart__line">${money(p.price * q)}</span>
+            <span class="cart__line">${money(eff(p) * q)}</span>
           </div>
         </li>`;
       }).join('');
@@ -241,6 +254,9 @@
     if (sumEl) sumEl.hidden = n === 0;
     if (clearBtn) clearBtn.hidden = n === 0;
     if (subEl) subEl.textContent = money(subtotal());
+    const saved = savedTotal();
+    if (saveEl) saveEl.hidden = !(n && saved > 0);
+    if (savedEl) savedEl.textContent = money(saved);
     badges.forEach((b) => { b.textContent = String(n); b.hidden = n === 0; });
     const cartErr = document.querySelector('[data-err="cart"]');
     if (n && cartErr) cartErr.classList.remove('is-on');
@@ -265,7 +281,70 @@
     setTimeout(() => btn.classList.remove('is-added'), 900);
   };
 
+  /* ---------- giá trên trang: vẽ lại theo bảng giá mới nhất ---------- */
+  const paintPrice = (el) => {
+    const p = P[el.dataset.priceSku];
+    if (!p) return;
+    el.classList.toggle('price--sale', offPct(p) > 0);
+    el.innerHTML = priceInner(p, parseInt(el.dataset.qty || '1', 10), el.dataset.pill === '1');
+  };
+  const paintPrices = () => {
+    document.querySelectorAll('[data-price-sku]').forEach(paintPrice);
+    document.querySelectorAll('[data-off-sku]').forEach((el) => {
+      const off = offPct(P[el.dataset.offSku]);
+      el.textContent = off ? `-${off}%` : '';
+      el.hidden = !off;
+    });
+    document.querySelectorAll('[data-ritual]').forEach((el) => {
+      let now = 0;
+      let was = 0;
+      el.dataset.ritual.split(',').forEach((pair) => {
+        const [sku, q] = pair.split(':');
+        const p = P[sku];
+        if (!p) return;
+        const n = parseInt(q, 10) || 1;
+        now += eff(p) * n;
+        was += p.price * n;
+      });
+      el.classList.toggle('price--sale', now < was);
+      el.innerHTML = `<span class="price__now">${money(now)}</span>${now < was ? `<s class="price__was">${money(was)}</s>` : ''}`;
+    });
+  };
+
+  // Lấy giá mới nhất từ Google Sheet (qua /api/prices); lỗi thì giữ giá đang hiện
+  const refreshPrices = async () => {
+    if (!DATA.pricesUrl) return;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    try {
+      const res = await fetch(DATA.pricesUrl, { signal: ctrl.signal });
+      if (!res.ok) return;
+      const out = await res.json();
+      if (!out || !out.prices) return;
+      let changed = false;
+      Object.entries(out.prices).forEach(([sku, q]) => {
+        const p = P[sku];
+        if (!p || !q) return;
+        const list = Math.round(Number(q.list) || 0) || p.price;
+        const saleRaw = Math.round(Number(q.sale) || 0);
+        const sale = saleRaw > 0 && saleRaw < list ? saleRaw : 0;
+        if (list !== p.price || sale !== (p.sale || 0)) {
+          p.price = list;
+          p.sale = sale;
+          changed = true;
+        }
+      });
+      if (changed) { paintPrices(); renderCart(); }
+    } catch {
+      // giữ nguyên giá đang hiện
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  paintPrices();
   renderCart();
+  refreshPrices();
   window.addEventListener('storage', (e) => { if (e.key === CART_KEY) { cart = sanitize(store.get(CART_KEY, {})); renderCart(); } });
 
   /* ---------- bộ lọc ---------- */
@@ -303,7 +382,12 @@
         <p class="pd__brand">${esc(p.brand)}</p>
         <h2 class="pd__name" id="sheet-title">${esc(p.name)}</h2>
         <p class="pd__type">${esc(p.type)}</p>
-        <p class="pd__price">${money(p.price)}<span>${esc(p.size)}</span></p>
+        ${offPct(p)
+          ? `<div class="pd__prices">
+          <p class="pd__row"><span class="pd__label">Giá giảm</span><span class="price price--sale"><span class="price__now">${money(eff(p))}</span><span class="price__off">-${offPct(p)}%</span></span></p>
+          <p class="pd__row"><span class="pd__label">Giá niêm yết</span><s class="price__was">${money(p.price)}</s><span class="pd__size">${esc(p.size)}</span></p>
+        </div>`
+          : `<p class="pd__price"><span class="price__now">${money(p.price)}</span><span class="pd__size">${esc(p.size)}</span></p>`}
         <p class="pd__benefit">${esc(p.benefit)}</p>
         ${p.forWhom ? block('Dành cho', `<p>${esc(p.forWhom)}</p>`) : ''}
         ${p.usage ? block('Cách dùng', `<p>${esc(p.usage)}</p>`) : ''}
@@ -399,9 +483,9 @@
         v.classList.toggle('is-on', on);
         v.setAttribute('aria-checked', String(on));
       });
-      const price = art.querySelector('[data-price-out]');
+      const price = art.querySelector('[data-price-out] [data-price-sku]');
       const size = art.querySelector('[data-size-out]');
-      if (price) price.textContent = money(variant.dataset.price);
+      if (price) { price.dataset.priceSku = variant.dataset.variant; paintPrice(price); }
       if (size) size.textContent = variant.dataset.size;
       return;
     }
@@ -546,7 +630,7 @@
       if (!customer) return;
 
       const consult = Boolean(consultBox && consultBox.checked);
-      const items = Object.entries(cart).map(([sku, qty]) => ({ sku, name: P[sku].name, size: P[sku].size, qty, price: P[sku].price }));
+      const items = Object.entries(cart).map(([sku, qty]) => ({ sku, name: P[sku].name, size: P[sku].size, qty, price: eff(P[sku]), list: P[sku].price }));
       const orderId = makeId();
       const done = (id) => {
         const previewNote = DATA.preview

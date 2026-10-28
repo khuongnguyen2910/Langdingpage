@@ -26,7 +26,15 @@ const esc = (s = '') => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 // Nội dung có sẵn thẻ <em>, <strong> do mình viết trong site.json, giữ nguyên.
 const rich = (s = '') => String(s);
-const money = (n) => `${Number(n).toLocaleString('vi-VN').replace(/,/g, '.')}${site.order.currency}`;
+const money = (n) => `${String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, '.')}${site.order.currency}`;
+// Giá bán: có giá giảm thấp hơn giá niêm yết thì bán theo giá giảm
+const eff = (p) => (p.sale > 0 && p.sale < p.price ? p.sale : p.price);
+const offPct = (p) => (p.sale > 0 && p.sale < p.price ? Math.round((1 - p.sale / p.price) * 100) : 0);
+// Cùng cấu trúc với priceInner trong src/app.js để script trên trang vẽ lại khi giá trên sheet đổi
+function priceHtml(p, { qty = 1, pill = false } = {}) {
+  const off = offPct(p);
+  return `<span class="price${off ? ' price--sale' : ''}" data-price-sku="${p.sku}"${qty > 1 ? ` data-qty="${qty}"` : ''}${pill ? ' data-pill="1"' : ''}>${qty > 1 ? `${qty} x ` : ''}<span class="price__now">${money(eff(p))}</span>${off ? `<s class="price__was">${money(p.price)}</s>` : ''}${off && pill ? `<span class="price__off">-${off}%</span>` : ''}</span>`;
+}
 
 const origin = SINGLE ? '' : (() => {
   const host = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || '';
@@ -44,6 +52,35 @@ const missing = [
   ...site.rituals.flatMap((r) => r.items.map((i) => i.sku)),
 ].filter((sku) => !bySku.has(sku));
 if (missing.length) throw new Error(`Thiếu sản phẩm trong products.json: ${missing.join(', ')}`);
+
+/* ---------- giá từ Google Sheet (tab Bảng giá) ---------- */
+
+async function syncPricesFromSheet() {
+  if (OFFLINE || SINGLE || !ORDER_ENDPOINT) return;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20_000);
+  try {
+    const res = await fetch(`${ORDER_ENDPOINT}?action=prices`, { redirect: 'follow', signal: ctrl.signal });
+    const data = await res.json();
+    if (!data || !data.prices) throw new Error('Apps Script chưa trả bảng giá, cần triển khai phiên bản mới');
+    let n = 0;
+    let s = 0;
+    for (const p of products) {
+      const q = data.prices[p.sku];
+      if (!q) continue;
+      const list = Math.round(Number(q.list) || 0);
+      const sale = Math.round(Number(q.sale) || 0);
+      if (list > 0) { p.price = list; n++; }
+      p.sale = sale > 0 && sale < p.price ? sale : 0;
+      if (p.sale) s++;
+    }
+    log(`Giá lấy từ Google Sheet: ${n} mã, ${s} mã đang có giá giảm.`);
+  } catch (err) {
+    warnings.push(`Không lấy được giá từ Google Sheet, dùng giá trong products.json: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /* ---------- tải file gốc, có cache và thử lại ---------- */
 
@@ -239,9 +276,9 @@ function renderFeature(f, index, imgs) {
   const name = f.title || first.name;
   const variants = items.length > 1
     ? `<div class="variants" role="radiogroup" aria-label="Chọn quy cách">
-            ${items.map((p, i) => `<button type="button" class="variant${i === 0 ? ' is-on' : ''}" role="radio" aria-checked="${i === 0}" data-variant="${p.sku}" data-price="${p.price}" data-size="${esc(p.size)}">
+            ${items.map((p, i) => `<button type="button" class="variant${i === 0 ? ' is-on' : ''}" role="radio" aria-checked="${i === 0}" data-variant="${p.sku}" data-size="${esc(p.size)}">
               <span class="variant__label">${esc((f.variantLabels || {})[p.sku] || p.size)}</span>
-              <span class="variant__price">${money(p.price)}</span>
+              <span class="variant__price">${priceHtml(p)}</span>
             </button>`).join('\n            ')}
           </div>`
     : '';
@@ -260,7 +297,7 @@ function renderFeature(f, index, imgs) {
           ${chips.length ? `<ul class="chips" role="list" aria-label="${first.contents ? 'Trong hộp' : 'Thành phần nổi bật'}">${chips.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>` : ''}
           ${variants}
           <div class="buy">
-            <p class="buy__price"><span data-price-out>${money(first.price)}</span><span class="buy__size" data-size-out>${esc(first.size)}</span></p>
+            <p class="buy__price"><span data-price-out>${priceHtml(first, { pill: true })}</span><span class="buy__size" data-size-out>${esc(first.size)}</span></p>
             <div class="buy__row">
               ${qtyControl(`f${index}`)}
               <button type="button" class="btn btn--gold" data-add-feature="${index}">${icon.bag}<span>Thêm vào đơn</span></button>
@@ -276,13 +313,14 @@ function renderCard(p, img, i) {
         <li class="pcard" data-cat="${p.cat}" data-sku="${p.sku}" style="--i:${i % 8}">
           <button type="button" class="pcard__media" data-open="${p.sku}" data-label="${esc(p.name)}" aria-label="Xem chi tiết ${esc(p.name)}">
             ${imgTag(img, { sizes: SIZES.card })}
+            <span class="pcard__badge" data-off-sku="${p.sku}"${offPct(p) ? '' : ' hidden'}>${offPct(p) ? `-${offPct(p)}%` : ''}</span>
           </button>
           <div class="pcard__body">
             <p class="pcard__brand">${esc(p.brand)}</p>
             <h3 class="pcard__name"><button type="button" data-open="${p.sku}">${esc(p.name)}</button></h3>
             <p class="pcard__short">${esc(p.short)}</p>
             <div class="pcard__foot">
-              <p class="pcard__price">${money(p.price)}<span>${esc(p.size)}</span></p>
+              <p class="pcard__price">${priceHtml(p)}<span class="pcard__size">${esc(p.size)}</span></p>
               <button type="button" class="pcard__add" data-add="${p.sku}" aria-label="Thêm ${esc(p.name)} vào đơn">${icon.plus}<span>Thêm</span></button>
             </div>
           </div>
@@ -291,7 +329,9 @@ function renderCard(p, img, i) {
 
 function renderRitual(r) {
   const lines = r.items.map((it) => ({ p: bySku.get(it.sku), qty: it.qty }));
-  const total = lines.reduce((s, l) => s + l.p.price * l.qty, 0);
+  const total = lines.reduce((s, l) => s + eff(l.p) * l.qty, 0);
+  const totalList = lines.reduce((s, l) => s + l.p.price * l.qty, 0);
+  const setKey = r.items.map((it) => `${it.sku}:${it.qty}`).join(',');
   return `
         <li class="ritual reveal">
           <p class="ritual__for">${esc(r.for)}</p>
@@ -303,11 +343,11 @@ function renderRitual(r) {
             </div>`).join('\n            ')}
           </div>
           <ul class="ritual__items" role="list">
-            ${lines.map((l) => `<li><button type="button" data-open="${l.p.sku}">${esc(l.p.name)}</button><span>${l.qty > 1 ? `${l.qty} x ` : ''}${money(l.p.price)}</span></li>`).join('\n            ')}
+            ${lines.map((l) => `<li><button type="button" data-open="${l.p.sku}">${esc(l.p.name)}</button>${priceHtml(l.p, { qty: l.qty })}</li>`).join('\n            ')}
           </ul>
           <div class="ritual__foot">
-            <p class="ritual__total"><span>Cả liệu trình</span>${money(total)}</p>
-            <button type="button" class="btn btn--line" data-add-set="${r.items.map((it) => `${it.sku}:${it.qty}`).join(',')}">${icon.bag}<span>Thêm cả liệu trình</span></button>
+            <p class="ritual__total"><span class="ritual__label">Cả liệu trình</span><span class="price${total < totalList ? ' price--sale' : ''}" data-ritual="${setKey}"><span class="price__now">${money(total)}</span>${total < totalList ? `<s class="price__was">${money(totalList)}</s>` : ''}</span></p>
+            <button type="button" class="btn btn--line" data-add-set="${setKey}">${icon.bag}<span>Thêm cả liệu trình</span></button>
           </div>
         </li>`;
 }
@@ -436,7 +476,8 @@ ${head}
           <ul class="cart__list" role="list" data-cart-list></ul>
           <p class="cart__empty" data-cart-empty>${esc(F.empty)}</p>
           <div class="cart__sum" data-cart-sum hidden>
-            <p><span>Tạm tính</span><strong data-subtotal>0${site.order.currency}</strong></p>
+            <p class="cart__save" data-cart-save hidden><span>Đã giảm</span><span data-saved>0${site.order.currency}</span></p>
+            <p class="cart__total"><span>Tạm tính</span><strong data-subtotal>0${site.order.currency}</strong></p>
             <p class="cart__note">${esc(F.feeNote)}</p>
           </div>
         </div>
@@ -526,6 +567,8 @@ async function main() {
       : 'Tải ảnh sản phẩm từ cdn.givehada.com');
   if (!ORDER_ENDPOINT && !SINGLE) warnings.push('Chưa có địa chỉ nhận đơn (order.endpoint). Form sẽ báo lỗi khi gửi.');
 
+  await syncPricesFromSheet();
+
   const A = site.assets;
   const fonts = await buildFonts(SINGLE);
   const logo = await buildImage(A.base + A.logo.path, { ...A.logo, widths: [240, 400], quality: 90, alpha: true, label: 'GIVEHADA' });
@@ -607,6 +650,7 @@ async function main() {
   // Dữ liệu cho script trên trang: chỉ những gì cần để tính đơn và hiện chi tiết
   const data = {
     endpoint: SINGLE ? '' : ORDER_ENDPOINT,
+    pricesUrl: SINGLE || !ORDER_ENDPOINT ? '' : '/api/prices',
     preview: SINGLE,
     currency: site.order.currency,
     maxQty: site.order.maxQty,
@@ -615,7 +659,7 @@ async function main() {
     email: site.order.email,
     products: Object.fromEntries(products.map((p, i) => [p.sku, {
       name: p.name, brand: p.brand, type: p.type, benefit: p.benefit, forWhom: p.forWhom, usage: p.usage,
-      ingredients: p.ingredients, contents: p.contents || [], size: p.size, price: p.price,
+      ingredients: p.ingredients, contents: p.contents || [], size: p.size, price: p.price, sale: p.sale || 0,
       images: gallery[i].map((g) => ({ src: g.src, srcset: g.srcset, w: g.w, h: g.h })),
     }])),
   };
